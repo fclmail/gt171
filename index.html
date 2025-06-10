@@ -1,0 +1,344 @@
+<!DOCTYPE html> 
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Flash Loan Arbitrage Interface</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <style>
+    body {
+      background-color: #001f2d;
+      color: #fff;
+      font-family: sans-serif;
+      padding: 20px;
+    }
+    .large-display {
+      font-size: 1.5em;
+      font-weight: bold;
+      margin: 10px 0;
+    }
+    .profitable {
+      color: #00ff00;
+    }
+    button {
+      padding: 10px;
+      margin-right: 10px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    #startBtn, #stopBtn {
+      background-color: #00ff00;
+      color: #000;
+    }
+    input {
+      margin: 5px 0;
+      padding: 5px;
+    }
+    table {
+      width: 100%;
+      margin-top: 10px;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 6px;
+      border: 1px solid #333;
+    }
+    a { color: #00ffff; }
+    #logTextArea {
+      width: 100%;
+      height: 300px;
+      margin-top: 10px;
+      background: #000;
+      color: #0f0;
+      padding: 10px;
+      font-family: monospace;
+      overflow-y: scroll;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Flash Loan Arbitrage</h1>
+
+<p><strong>Wallet:</strong> <span id="wallet">Not connected</span></p>
+<p><strong>USDC Balance:</strong> <span id="balance">0.00</span></p>
+
+<div>
+  <label>Amount In (USDC):</label><br>
+  <input type="number" id="amountIn" value="10" step="0.01"><br>
+
+  <label>Minimum Profit (USDC):</label><br>
+  <input type="number" id="minProfit" value="0.0000001" step="0.0000001"><br>
+
+  <label>Slippage (%):</label><br>
+  <input type="number" id="slippage" value="0.5" step="0.1"><br>
+
+  <label>Gas Limit:</label><br>
+  <input type="number" id="gasLimit" value="1000000"><br>
+
+  <label>Repeat Every (sec):</label><br>
+  <input type="number" id="scanInterval" value="1"><br>
+
+  <label><input type="checkbox" id="onlyIfProfitable" checked> Only trade if profitable</label><br>
+  <label><input type="checkbox" id="autoConfirmToggle"> Auto Confirm Trades</label><br><br>
+
+  <button id="startBtn" onclick="startTrading()">Start Trading</button>
+  <button id="stopBtn" onclick="stopTrading()" disabled>Stop Trading</button>
+  <button onclick="connectWallet()">🔌 Connect Wallet</button>
+  <button onclick="approveUSDC()">✅ Approve USDC</button>
+</div>
+
+<p class="large-display" id="arbDisplay">Arbitrage Info will appear here...</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Token</th>
+      <th>Buy DEX</th>
+      <th>Sell DEX</th>
+      <th>Profit ($)</th>
+      <th>Profit (%)</th>
+      <th>Status</th>
+      <th>Tx</th>
+    </tr>
+  </thead>
+  <tbody id="logTable"></tbody>
+</table>
+
+<textarea id="logTextArea" readonly></textarea>
+
+<script>
+const CONTRACT_ADDRESS = "0x98BD86aDa64DC52E60392a43050fad5E9cAcb62F";
+const CONTRACT_ABI = [
+	{
+		"inputs": [],
+		"stateMutability": "nonpayable",
+		"type": "constructor"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "tokenIn",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "tokenOut",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "inputAmount",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "outputAmount",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "profit",
+				"type": "uint256"
+			}
+		],
+		"name": "ArbitrageExecuted",
+		"type": "event"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "router1",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "router2",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "tokenIn",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "tokenOut",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amountIn",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "minProfit",
+				"type": "uint256"
+			}
+		],
+		"name": "executeArbitrage",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			}
+		],
+		"name": "withdrawToken",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "owner",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	}
+ ];
+
+const TOKENS = [
+  { symbol: "USDC", address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", decimals: 6 },
+  { symbol: "WETH", address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", decimals: 18 },
+  { symbol: "WBTC", address: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6", decimals: 8 },
+  { symbol: "AAVE", address: "0xD6DF932A45C0f255f85145f286eA0b292B21C90B", decimals: 18 }
+];
+
+const ROUTERS = {
+  quickswap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
+};
+
+let provider, signer, user, interval;
+
+async function connectWallet() {
+  provider = new ethers.providers.Web3Provider(window.ethereum);
+  await provider.send("eth_requestAccounts", []);
+  signer = provider.getSigner();
+  user = await signer.getAddress();
+  document.getElementById("wallet").textContent = user;
+  updateBalance();
+}
+
+async function updateBalance() {
+  const usdc = new ethers.Contract(TOKENS[0].address, ["function balanceOf(address) view returns (uint256)"], provider);
+  const bal = await usdc.balanceOf(user);
+  document.getElementById("balance").textContent = (bal / 1e6).toFixed(2);
+}
+
+async function approveUSDC() {
+  const amount = ethers.constants.MaxUint256;
+  const usdc = new ethers.Contract(TOKENS[0].address, ["function approve(address,uint256) returns (bool)"], signer);
+  const tx = await usdc.approve(CONTRACT_ADDRESS, amount);
+  await tx.wait();
+  logText("✅ USDC Approved for Arbitrage Contract");
+}
+
+function logText(msg) {
+  const time = new Date().toLocaleTimeString();
+  const logBox = document.getElementById("logTextArea");
+  logBox.value += `[${time}] ${msg}\n`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function startTrading() {
+  clearInterval(interval);
+  document.getElementById("startBtn").disabled = true;
+  document.getElementById("stopBtn").disabled = false;
+  const speed = parseInt(document.getElementById("scanInterval").value) * 1000;
+  interval = setInterval(scanArbitrage, speed);
+  logText("🚀 STARTING SCAN...");
+}
+
+function stopTrading() {
+  clearInterval(interval);
+  document.getElementById("startBtn").disabled = false;
+  document.getElementById("stopBtn").disabled = true;
+  logText("🛑 SCAN STOPPED.");
+}
+
+async function scanArbitrage() {
+  const amountIn = parseFloat(document.getElementById("amountIn").value);
+  const minProfit = parseFloat(document.getElementById("minProfit").value);
+  const slippage = parseFloat(document.getElementById("slippage").value);
+  const autoConfirm = document.getElementById("autoConfirmToggle").checked;
+  const onlyIfProfitable = document.getElementById("onlyIfProfitable").checked;
+  const gasLimit = parseInt(document.getElementById("gasLimit").value);
+
+  const amountInParsed = ethers.utils.parseUnits(amountIn.toString(), TOKENS[0].decimals);
+  const minProfitParsed = ethers.utils.parseUnits(minProfit.toString(), TOKENS[0].decimals);
+
+  for (let token of TOKENS.slice(1)) {
+    for (let buy in ROUTERS) {
+      for (let sell in ROUTERS) {
+        if (buy === sell) continue;
+        try {
+          const routerBuy = new ethers.Contract(ROUTERS[buy], ["function getAmountsOut(uint,address[]) view returns (uint[])"], provider);
+          const routerSell = new ethers.Contract(ROUTERS[sell], ["function getAmountsOut(uint,address[]) view returns (uint[])"], provider);
+
+          const outToken = await routerBuy.getAmountsOut(amountInParsed, [TOKENS[0].address, token.address]);
+          const backToUSDC = await routerSell.getAmountsOut(outToken[1], [token.address, TOKENS[0].address]);
+
+          const profit = backToUSDC[1].sub(amountInParsed);
+          const realProfit = parseFloat(ethers.utils.formatUnits(profit, TOKENS[0].decimals));
+          const pct = (realProfit / amountIn) * 100;
+
+          if (!onlyIfProfitable || realProfit >= minProfit) {
+            const time = new Date().toLocaleTimeString();
+            document.getElementById("arbDisplay").textContent = `✅ ${token.symbol}: $${realProfit.toFixed(6)} (${pct.toFixed(2)}%) via ${buy} → ${sell}`;
+            document.getElementById("arbDisplay").className = "large-display profitable";
+
+            logText(`🟢 OPPORTUNITY: ${token.symbol} Buy @ ${buy} → Sell @ ${sell} | Profit: $${realProfit.toFixed(6)} | ${pct.toFixed(2)}%`);
+
+            if (autoConfirm) {
+              const arb = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+              const tx = await arb.executeArbitrage(
+                ROUTERS[buy], ROUTERS[sell], TOKENS[0].address, token.address,
+                amountInParsed, minProfitParsed,
+                { gasLimit }
+              );
+              const receipt = await tx.wait();
+              document.getElementById("logTable").innerHTML += `<tr>
+                <td>${time}</td><td>${token.symbol}</td><td>${buy}</td><td>${sell}</td>
+                <td>$${realProfit.toFixed(6)}</td><td>${pct.toFixed(2)}%</td><td>✅</td>
+                <td><a href="https://polygonscan.com/tx/${receipt.transactionHash}" target="_blank">${receipt.transactionHash.slice(0, 10)}...</a></td>
+              </tr>`;
+              updateBalance();
+              logText(`✅ Tx confirmed | Hash: ${receipt.transactionHash}`);
+            }
+          }
+        } catch (err) {
+          logText("⚠️ ERROR: " + err.message);
+        }
+      }
+    }
+  }
+}
+</script>
+
+</body>
+</html>
